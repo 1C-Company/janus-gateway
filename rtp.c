@@ -44,8 +44,13 @@ char *janus_rtp_payload(char *buf, int len, int *plen) {
 	if (len-hlen <= 0) {
 		return NULL;
 	}
+
+	int padding_len = 0;
+	if (rtp->padding){
+		padding_len = (unsigned char)*(buf + len - 1);
+	}
 	if(plen)
-		*plen = len-hlen;
+		*plen = len-hlen;// - padding_len;
 	return buf+hlen;
 }
 

@@ -4812,7 +4812,7 @@ void janus_videoroom_incoming_rtp(janus_plugin_session *handle, janus_plugin_rtp
 		/* Save the frame if we're recording */
 		if(!video || (participant->ssrc[0] == 0 && participant->rid[0] == NULL)) {
 			janus_recorder_save_frame(video ? participant->vrc : participant->arc, buf, len);
-		} else {
+		} else if (participant->vrc) {
 			/* We're simulcasting, save the best video quality */
 			gboolean save = janus_rtp_simulcasting_context_process_rtp(&participant->rec_simctx,
 				buf, len, participant->ssrc, participant->rid, participant->vcodec, &participant->rec_ctx);
@@ -4859,6 +4859,7 @@ void janus_videoroom_incoming_rtp(janus_plugin_session *handle, janus_plugin_rtp
 		/* Go: some viewers may decide to drop the packet, but that's up to them */
 		janus_mutex_lock_nodebug(&participant->subscribers_mutex);
 		g_slist_foreach(participant->subscribers, janus_videoroom_relay_rtp_packet, &packet);
+		int hasSubscriber = participant->subscribers != NULL;
 		janus_mutex_unlock_nodebug(&participant->subscribers_mutex);
 
 		/* Check if we need to send any REMB, FIR or PLI back to this publisher */
@@ -4876,6 +4877,9 @@ void janus_videoroom_incoming_rtp(janus_plugin_session *handle, janus_plugin_rtp
 			if(send_remb && participant->bitrate) {
 				/* We send a few incremental REMB messages at startup */
 				uint32_t bitrate = participant->bitrate;
+				// low bitrate when no subscribers
+				if (!hasSubscriber && bitrate > 80000)
+					bitrate = 80000;
 				if(participant->remb_startup > 0) {
 					bitrate = bitrate/participant->remb_startup;
 					participant->remb_startup--;
@@ -5162,16 +5166,19 @@ static void janus_videoroom_hangup_subscriber(janus_videoroom_subscriber * s) {
 		return;
 	}
 	/* Check if the owner needs to be cleaned up */
-	if(s->pvt_id > 0 && s->room != NULL) {
-		janus_mutex_lock(&s->room->mutex);
-		janus_videoroom_publisher *owner = g_hash_table_lookup(s->room->private_ids, GUINT_TO_POINTER(s->pvt_id));
+	janus_videoroom *room = s->room;
+	if(room != NULL)
+		janus_refcount_increase(&room->ref);
+	if(s->pvt_id > 0 && room != NULL) {
+		janus_mutex_lock(&room->mutex);
+		janus_videoroom_publisher *owner = g_hash_table_lookup(room->private_ids, GUINT_TO_POINTER(s->pvt_id));
 		if(owner != NULL) {
 			janus_mutex_lock(&owner->subscribers_mutex);
 			/* Note: we should refcount these subscription-publisher mappings as well */
 			owner->subscriptions = g_slist_remove(owner->subscriptions, s);
 			janus_mutex_unlock(&owner->subscribers_mutex);
 		}
-		janus_mutex_unlock(&s->room->mutex);
+		janus_mutex_unlock(&room->mutex);
 	}
 	/* TODO: are we sure this is okay as other handlers use feed directly without synchronization */
 	if(s->feed)
@@ -5185,6 +5192,8 @@ static void janus_videoroom_hangup_subscriber(janus_videoroom_subscriber * s) {
 		/* Remove the reference we added when "joining" the room */
 		janus_refcount_decrease(&s->ref);
 	}
+	if(room != NULL)
+		janus_refcount_decrease(&room->ref);
 }
 
 static void janus_videoroom_hangup_media_internal(janus_plugin_session *handle) {

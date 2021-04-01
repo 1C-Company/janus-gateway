@@ -1178,6 +1178,8 @@ janus_sdp *janus_sdp_generate_offer(const char *name, const char *address, ...) 
 		/* It is safe to add transport-wide rtcp feedback message here, won't be used unless the header extension is negotiated */
 		a = janus_sdp_attribute_create("rtcp-fb", "%d transport-cc", audio_pt);
 		m->attributes = g_list_append(m->attributes, a);
+		a = janus_sdp_attribute_create("rtcp-fb", "%d nack", audio_pt);
+		m->attributes = g_list_append(m->attributes, a);
 		offer->m_lines = g_list_append(offer->m_lines, m);
 	}
 	if(do_video) {
@@ -1486,6 +1488,8 @@ janus_sdp *janus_sdp_generate_answer(janus_sdp *offer, ...) {
 						janus_sdp_attribute *a = janus_sdp_attribute_create("fmtp", "%d %s", pt, audio_fmtp);
 						am->attributes = g_list_append(am->attributes, a);
 					}
+					a = janus_sdp_attribute_create("rtcp-fb", "%d nack", pt);
+					am->attributes = g_list_append(am->attributes, a);
 				}
 			} else {
 				/* Add rtpmap attribute */

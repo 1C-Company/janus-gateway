@@ -105,7 +105,7 @@ general: {
 									# As such, if you want to use this you should
 									# provision the correct value according to the
 									# available resources (e.g., CPUs available).
-	#opaqueid_in_api = true			# Opaque IDs set by applications are typically
+	opaqueid_in_api = true			# Opaque IDs set by applications are typically
 									# only passed to event handlers for correlation
 									# purposes, but not sent back to the user or
 									# application in the related Janus API responses
@@ -198,11 +198,11 @@ certificates: {
 # you should pick a reasonable trade-off (usually 2*max expected RTT).
 media: {
 	#ipv6 = true
-	#min_nack_queue = 500
+	min_nack_queue = 500
 	#rtp_port_range = "20000-40000"
 	#dtls_mtu = 1200
-	#no_media_timer = 1
-	#slowlink_threshold = 4
+	no_media_timer = 2
+	slowlink_threshold = 8
 	#twcc_period = 100
 	#dtls_timeout = 500
 

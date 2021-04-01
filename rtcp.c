@@ -53,6 +53,18 @@ int janus_rtcp_parse(janus_rtcp_context *ctx, char *packet, int len) {
 	return janus_rtcp_fix_ssrc(ctx, packet, len, 0, 0, 0);
 }
 
+int janus_rtcp_first_len(char *packet, int len){
+	if(packet == NULL || len == 0)
+		return 0;
+	janus_rtcp_header *rtcp = (janus_rtcp_header *)packet;
+	int total = len;
+	if (!janus_rtcp_check_len(rtcp, total))
+		return 0;
+	if(rtcp->version != 2)
+		return 0;
+	return ntohs(rtcp->length) * 4 + 4;
+}
+
 guint32 janus_rtcp_get_sender_ssrc(char *packet, int len) {
 	if(packet == NULL || len == 0)
 		return 0;
@@ -138,6 +150,21 @@ guint32 janus_rtcp_get_receiver_ssrc(char *packet, int len) {
 				}
 				break;
 			}
+			case RTCP_RTPFB: {
+				/* RTPFB, Transport layer FB message (rfc4585) */
+				janus_rtcp_fb *rtcpfb = (janus_rtcp_fb *)rtcp;
+				return ntohl(rtcpfb->media);
+			}
+			case RTCP_PSFB: {
+				/* PSFB, Payload-specific FB message (rfc4585) */
+				janus_rtcp_fb *rtcpfb = (janus_rtcp_fb *)rtcp;
+				return ntohl(rtcpfb->media);
+			}
+			case RTCP_XR: {
+				/* XR, extended reports (rfc3611) */
+				janus_rtcp_xr *xr = (janus_rtcp_xr *)rtcp;
+				return ntohl(xr->ssrc);
+			}
 			default:
 				break;
 		}
@@ -154,7 +181,24 @@ guint32 janus_rtcp_get_receiver_ssrc(char *packet, int len) {
 	return 0;
 }
 
-/* Helper to handle an incoming SR: triggered by a call to janus_rtcp_fix_ssrc with a valid context pointer */
+guint32 janus_rtcp_get_pt(char *packet, int len){
+	if(packet == NULL || len == 0)
+		return 0;
+	janus_rtcp_header *rtcp = (janus_rtcp_header *)packet;
+	int total = len;
+	while(rtcp) {
+		if (!janus_rtcp_check_len(rtcp, total))
+			break;
+		if(rtcp->version != 2)
+			break;
+		return rtcp->type ;
+	}
+	return 0;
+}
+
+
+
+/* Helper to handle an incoming SR: triggered by a call to janus_rtcp_fix_ssrc with a valid context pointer  */
 static void janus_rtcp_incoming_sr(janus_rtcp_context *ctx, janus_rtcp_sr *sr) {
 	if(ctx == NULL)
 		return;

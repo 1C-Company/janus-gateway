@@ -332,6 +332,7 @@ guint32 janus_rtcp_get_sender_ssrc(char *packet, int len);
  * @param[in] len The message data length in bytes
  * @returns The receiver SSRC, or 0 in case of error */
 guint32 janus_rtcp_get_receiver_ssrc(char *packet, int len);
+guint32 janus_rtcp_get_pt(char *packet, int len);
 
 /*! \brief Method to check that a RTCP packet size is at least the minimum necessary (8 bytes)
  *  and to validate the length field against the actual size
@@ -373,6 +374,8 @@ gboolean janus_is_rtcp(char *buf, guint len);
  * @param[in] len The message data length in bytes
  * @returns 0 in case of success, -1 on errors */
 int janus_rtcp_parse(janus_rtcp_context *ctx, char *packet, int len);
+
+int janus_rtcp_first_len(char *packet, int len);
 
 /*! \brief Method to fix incoming RTCP SR and RR data
  * @param[in] packet The message data

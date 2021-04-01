@@ -520,6 +520,7 @@ struct janus_ice_component {
 	gint64 nack_sent_log_ts;
 	/*! \brief Number of NACKs sent since last log message */
 	guint nack_sent_recent_cnt;
+	guint nack_sent_recent_cnt_audio;
 	/*! \brief List of recently received audio sequence numbers (as a support to NACK generation) */
 	janus_seq_info *last_seqs_audio;
 	/*! \brief List of recently received video sequence numbers (as a support to NACK generation, for each simulcast SSRC) */
