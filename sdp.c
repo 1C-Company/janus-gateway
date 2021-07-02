@@ -515,6 +515,10 @@ int janus_sdp_process(void *ice_handle, janus_sdp *remote_sdp, gboolean rids_hml
 			}
 			tempA = tempA->next;
 		}
+		if (stream->component && m->type == JANUS_SDP_AUDIO)
+			stream->component->do_audio_nacks = TRUE;
+
+
 		/* Now look for candidates and other info */
 		tempA = m->attributes;
 		while(tempA) {

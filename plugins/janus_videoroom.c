@@ -5331,7 +5331,7 @@ void janus_videoroom_incoming_rtp(janus_plugin_session *handle, janus_plugin_rtp
 		/* Save the frame if we're recording */
 		if(!video || (participant->ssrc[0] == 0 && participant->rid[0] == NULL)) {
 			janus_recorder_save_frame(video ? participant->vrc : participant->arc, buf, len);
-		} else {
+		} else if (participant->vrc) {
 			/* We're simulcasting, save the best video quality */
 			gboolean save = janus_rtp_simulcasting_context_process_rtp(&participant->rec_simctx,
 				buf, len, participant->ssrc, participant->rid, participant->vcodec, &participant->rec_ctx);
@@ -5378,6 +5378,7 @@ void janus_videoroom_incoming_rtp(janus_plugin_session *handle, janus_plugin_rtp
 		/* Go: some viewers may decide to drop the packet, but that's up to them */
 		janus_mutex_lock_nodebug(&participant->subscribers_mutex);
 		g_slist_foreach(participant->subscribers, janus_videoroom_relay_rtp_packet, &packet);
+		int needsRealBitrate = participant->ssrc[0] != 0 || participant->rid[0] != NULL || participant->subscribers != NULL;
 		janus_mutex_unlock_nodebug(&participant->subscribers_mutex);
 
 		/* Check if we need to send any REMB, FIR or PLI back to this publisher */
@@ -5395,6 +5396,9 @@ void janus_videoroom_incoming_rtp(janus_plugin_session *handle, janus_plugin_rtp
 			if(send_remb && participant->bitrate) {
 				/* We send a few incremental REMB messages at startup */
 				uint32_t bitrate = participant->bitrate;
+				// low bitrate when no subscribers
+				if (!needsRealBitrate && bitrate > 80000)
+					bitrate = 80000;
 				if(participant->remb_startup > 0) {
 					bitrate = bitrate/participant->remb_startup;
 					participant->remb_startup--;
