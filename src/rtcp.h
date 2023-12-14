@@ -340,6 +340,7 @@ guint32 janus_rtcp_get_sender_ssrc(char *packet, int len);
  * @param[in] len The message data length in bytes
  * @returns The receiver SSRC, or 0 in case of error */
 guint32 janus_rtcp_get_receiver_ssrc(char *packet, int len);
+guint32 janus_rtcp_get_pt(char *packet, int len);
 
 /*! \brief Method to check that a RTCP packet size is at least the minimum necessary (8 bytes)
  *  and to validate the length field against the actual size
@@ -380,7 +381,10 @@ gboolean janus_is_rtcp(char *buf, guint len);
  * @param[in] packet The message data
  * @param[in] len The message data length in bytes
  * @returns 0 in case of success, -1 on errors */
-int janus_rtcp_parse(janus_rtcp_context *ctx, char *packet, int len);
+struct janus_ice_peerconnection;
+int janus_rtcp_parse(janus_rtcp_context *ctx, char *packet, int len, struct janus_ice_peerconnection * janus_ice);
+
+int janus_rtcp_first_len(char *packet, int len);
 
 /*! \brief Method to fix incoming RTCP SR and RR data
  * @param[in] packet The message data
@@ -402,7 +406,8 @@ int janus_rtcp_fix_report_data(char *packet, int len, uint32_t base_ts, uint32_t
  * @param[in] newssrcl The SSRC of the sender to put in the message
  * @param[in] newssrcr The SSRC of the receiver to put in the message
  * @returns 0 in case of success, -1 on errors */
-int janus_rtcp_fix_ssrc(janus_rtcp_context *ctx, char *packet, int len, int fixssrc, uint32_t newssrcl, uint32_t newssrcr);
+struct janus_ice_peerconnection;
+int janus_rtcp_fix_ssrc(janus_rtcp_context *ctx, char *packet, int len, int fixssrc, uint32_t newssrcl, uint32_t newssrcr, struct janus_ice_peerconnection * janus_ice);
 
 /*! \brief Method to filter an outgoing RTCP message (http://tools.ietf.org/html/draft-ietf-straw-b2bua-rtcp-00)
  * @param[in] packet The message data

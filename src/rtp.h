@@ -63,6 +63,7 @@ typedef struct janus_rtp_packet {
 	gint64 created;
 	gint64 last_retransmit;
 	janus_plugin_rtp_extensions extensions;
+	int retransmit_count;
 } janus_rtp_packet;
 
 /*! \brief RTP extension */
@@ -261,6 +262,9 @@ typedef struct janus_rtp_switching_context {
 	gint16 seq_offset;
 	gint32 prev_delay, active_delay, ts_offset;
 	gint64 last_time, reference_time, start_time, evaluating_start_time;
+	uint16_t max_seq;
+	uint32_t max_ts;
+	gint64 max_time;
 } janus_rtp_switching_context;
 
 /*! \brief Set (or reset) the context fields to their default values
@@ -317,6 +321,13 @@ typedef struct janus_rtp_simulcasting_context {
 	gboolean changed_temporal;
 	/*! \brief Whether we need to send the user a keyframe request (PLI) */
 	gboolean need_pli;
+
+	gint64 fallback_time;
+
+	gboolean transport_cc_congestion_detected;
+	guint32 switching_ts;
+	int switching_sn;
+
 } janus_rtp_simulcasting_context;
 
 /*! \brief Set (or reset) the context fields to their default values

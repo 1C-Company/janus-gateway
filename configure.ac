@@ -852,6 +852,21 @@ PKG_CHECK_MODULES([DUKTAPE],
 AC_SUBST([DUKTAPE_CFLAGS])
 AC_SUBST([DUKTAPE_LIBS])
 
+
+PKG_CHECK_MODULES([OPUS],
+                  [opus],
+                  [
+                    AS_IF([test "x$enable_plugin_videoroom" = "xmaybe"],
+                          [enable_plugin_videoroom=yes])
+                  ],
+                  [
+                    AS_IF([test "x$enable_plugin_videoroom" = "xyes"],
+                          [AC_MSG_ERROR([opus not found. See README.md for installation instructions or use --disable-plugin-videoroom])])
+                  ])
+AC_SUBST([OPUS_CFLAGS])
+AC_SUBST([OPUS_LIBS])
+
+
 AM_CONDITIONAL([ENABLE_PLUGIN_AUDIOBRIDGE], [test "x$enable_plugin_audiobridge" = "xyes"])
 AM_CONDITIONAL([ENABLE_PLUGIN_DUKTAPE], [test "x$enable_plugin_duktape" = "xyes"])
 AM_CONDITIONAL([ENABLE_PLUGIN_ECHOTEST], [test "x$enable_plugin_echotest" = "xyes"])

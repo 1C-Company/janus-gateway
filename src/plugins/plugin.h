@@ -211,6 +211,8 @@ static janus_plugin janus_echotest_plugin =
 		.hangup_media = NULL,			\
 		.destroy_session = NULL,		\
 		.query_session = NULL, 			\
+		.outgoing_congestion = NULL, 			\
+		.query_user_name = NULL, 			\
 		## __VA_ARGS__ }
 
 
@@ -349,6 +351,8 @@ struct janus_plugin {
 	 * @returns A json_t object with the requested info */
 	json_t *(* const query_session)(janus_plugin_session *handle);
 
+	void (* const outgoing_congestion)(janus_plugin_session *handle, int congestion_flag);
+	int (* const query_user_name)(janus_plugin_session *handle, char * name, int name_size);
 };
 
 /*! \brief Callbacks to contact the Janus core */

@@ -528,6 +528,9 @@ int janus_sdp_process_remote(void *ice_handle, janus_sdp *remote_sdp, gboolean r
 			}
 			tempA = tempA->next;
 		}
+		if (medium && m->type == JANUS_SDP_AUDIO)
+			medium->do_nacks = TRUE;
+
 		/* Any SSRC in general? */
 		tempA = m->attributes;
 		while(tempA) {
@@ -1397,7 +1400,7 @@ char *janus_sdp_merge(void *ice_handle, janus_sdp *anon, gboolean offer) {
 	g_free(anon->c_addr);
 	anon->c_addr = NULL;
 	/* bundle: add new global attribute */
-	char buffer[8192], buffer_part[512];
+	char buffer[8192], buffer_part[4096];
 	buffer[0] = '\0';
 	buffer_part[0] = '\0';
 	g_snprintf(buffer, sizeof(buffer), "BUNDLE");

@@ -21,6 +21,8 @@
 #include "rtp.h"
 #include "rtcp.h"
 #include "utils.h"
+#include "ice.h"
+#include "plugins/plugin.h"
 
 
 /* Transport CC statuses */
@@ -49,8 +51,20 @@ gboolean janus_is_rtcp(char *buf, guint len) {
 	return ((header->type >= 64) && (header->type < 96));
 }
 
-int janus_rtcp_parse(janus_rtcp_context *ctx, char *packet, int len) {
-	return janus_rtcp_fix_ssrc(ctx, packet, len, 0, 0, 0);
+int janus_rtcp_parse(janus_rtcp_context *ctx, char *packet, int len, janus_ice_peerconnection * ice_stream) {
+	return janus_rtcp_fix_ssrc(ctx, packet, len, 0, 0, 0, ice_stream);
+}
+
+int janus_rtcp_first_len(char *packet, int len){
+	if(packet == NULL || len == 0)
+		return 0;
+	janus_rtcp_header *rtcp = (janus_rtcp_header *)packet;
+	int total = len;
+	if (!janus_rtcp_check_len(rtcp, total))
+		return 0;
+	if(rtcp->version != 2)
+		return 0;
+	return ntohs(rtcp->length) * 4 + 4;
 }
 
 guint32 janus_rtcp_get_sender_ssrc(char *packet, int len) {
@@ -138,6 +152,21 @@ guint32 janus_rtcp_get_receiver_ssrc(char *packet, int len) {
 				}
 				break;
 			}
+			case RTCP_RTPFB: {
+				/* RTPFB, Transport layer FB message (rfc4585) */
+				janus_rtcp_fb *rtcpfb = (janus_rtcp_fb *)rtcp;
+				return ntohl(rtcpfb->media);
+			}
+			case RTCP_PSFB: {
+				/* PSFB, Payload-specific FB message (rfc4585) */
+				janus_rtcp_fb *rtcpfb = (janus_rtcp_fb *)rtcp;
+				return ntohl(rtcpfb->media);
+			}
+			case RTCP_XR: {
+				/* XR, extended reports (rfc3611) */
+				janus_rtcp_xr *xr = (janus_rtcp_xr *)rtcp;
+				return ntohl(xr->ssrc);
+			}
 			default:
 				break;
 		}
@@ -207,6 +236,21 @@ void janus_rtcp_swap_report_blocks(char *packet, int len, uint32_t rtx_ssrc) {
 	}
 }
 
+guint32 janus_rtcp_get_pt(char *packet, int len){
+	if(packet == NULL || len == 0)
+		return 0;
+	janus_rtcp_header *rtcp = (janus_rtcp_header *)packet;
+	int total = len;
+	while(rtcp) {
+		if (!janus_rtcp_check_len(rtcp, total))
+			break;
+		if(rtcp->version != 2)
+			break;
+		return rtcp->type ;
+	}
+	return 0;
+}
+
 /* Helper to handle an incoming SR: triggered by a call to janus_rtcp_fix_ssrc with a valid context pointer */
 static void janus_rtcp_incoming_sr(janus_rtcp_context *ctx, janus_rtcp_sr *sr) {
 	if(ctx == NULL)
@@ -220,7 +264,7 @@ static void janus_rtcp_incoming_sr(janus_rtcp_context *ctx, janus_rtcp_sr *sr) {
 }
 
 /* Helper to handle an incoming transport-cc feedback: triggered by a call to janus_rtcp_fix_ssrc a valid context pointer */
-static void janus_rtcp_incoming_transport_cc(janus_rtcp_context *ctx, janus_rtcp_fb *twcc, int total) {
+static void janus_rtcp_incoming_transport_cc(janus_rtcp_context *ctx, janus_rtcp_fb *twcc, int total, struct janus_ice_peerconnection * ice_stream) {
 	if(ctx == NULL || twcc == NULL || total < 20)
 		return;
 	if(!janus_rtcp_check_fci((janus_rtcp_header *)twcc, total, 4))
@@ -293,10 +337,14 @@ static void janus_rtcp_incoming_transport_cc(janus_rtcp_context *ctx, janus_rtcp
 	/* Iterate on all recv deltas */
 	JANUS_LOG(LOG_HUGE, "[TWCC] Recv Deltas (%d/%"SCNu16"):\n", g_list_length(list), status_count);
 	num = 0;
-	uint16_t delta = 0;
-	uint32_t delta_us = 0;
+	int16_t delta = 0;
+	int32_t delta_us = 0;
 	GList *iter = list;
+	uint64_t arrival_time_us = reference*256ULL*250;
+	uint64_t now_us = janus_get_monotonic_time();
+
 	while(iter != NULL && total > 0) {
+		int have_packet = 0;
 		num++;
 		delta = 0;
 		s = GPOINTER_TO_UINT(iter->data);
@@ -305,6 +353,7 @@ static void janus_rtcp_incoming_transport_cc(janus_rtcp_context *ctx, janus_rtcp
 			delta = *data;
 			total--;
 			data++;
+			have_packet = 1;
 		} else if(s == janus_rtp_packet_status_largeornegativedelta) {
 			/* Large or negative delta = 2 bytes */
 			if(total < 2)
@@ -313,12 +362,94 @@ static void janus_rtcp_incoming_transport_cc(janus_rtcp_context *ctx, janus_rtcp
 			delta = ntohs(delta);
 			total -= 2;
 			data += 2;
+			have_packet = 1;
 		}
 		delta_us = delta*250;
 		/* Print summary */
 		JANUS_LOG(LOG_HUGE, "  [%02"SCNu16"][%"SCNu16"] %s (%"SCNu32"us)\n", num, (uint16_t)(base_seq+num-1),
 			janus_rtp_packet_status_description(s), delta_us);
 		iter = iter->next;
+		arrival_time_us += (int)delta*250000LL/1024;
+		if (have_packet)
+		{
+			uint64_t send_time_us = ice_stream->transport_wide_cc_out_packets_time[(base_seq+num-1)%TWCC_BUF_LEN];
+                        ice_stream->transport_wide_cc_out_packets_time[(base_seq+num-1)%TWCC_BUF_LEN] = 0;
+
+			if (!ice_stream->transport_wide_cc_time_offset || send_time_us + ice_stream->transport_wide_cc_time_offset > arrival_time_us)
+			{
+			        // Update TWCC-to-wallclock origins difference
+				ice_stream->transport_wide_cc_time_offset = arrival_time_us - send_time_us;
+			}
+			uint64_t delay_us = arrival_time_us - ice_stream->transport_wide_cc_time_offset - send_time_us;
+			if (delay_us > now_us - send_time_us)
+			{
+				// TWCC clocks runs faster than wallclock: fix origins difference
+				ice_stream->transport_wide_cc_time_offset += delay_us - (now_us - send_time_us);
+				delay_us = arrival_time_us - ice_stream->transport_wide_cc_time_offset - send_time_us;
+			}
+			if (!ice_stream->min_observed_delay || delay_us < ice_stream->min_observed_delay)
+			{
+				// ever-observed minumum delay
+				ice_stream->min_observed_delay = delay_us;
+			}
+
+			// now only delay above ever-observed minumum delay is taken into account
+			int32_t delay_ms = (int32_t)((delay_us - ice_stream->min_observed_delay)/1000);
+			if (send_time_us - ice_stream->min_update_time > 100*1000)
+			{
+			        // update not faster than 100 ms
+
+				// shift filters
+				memmove(ice_stream->delay, ice_stream->delay+1, sizeof(ice_stream->delay) - sizeof(ice_stream->delay[0]));
+				memmove(ice_stream->ddelay_dt, ice_stream->ddelay_dt+1, sizeof(ice_stream->ddelay_dt) - sizeof(ice_stream->ddelay_dt[0]));
+				ice_stream->ddelay_dt[TWCC_FILTER_LEN-1] = 0;
+				ice_stream->delay[TWCC_FILTER_LEN-1] = ice_stream->current_min_delay;
+
+				// short filter for delay value
+				ice_stream->filtered_min_delay = MIN(ice_stream->current_min_delay, ice_stream->delay[TWCC_FILTER_LEN-1]);
+
+
+				// start new 100-ms interval
+				ice_stream->current_min_delay = delay_ms;
+				ice_stream->min_update_time = send_time_us;
+
+				// mathed filter to estimate ddelay/dt
+				int i;
+				for (i = 0; i < TWCC_FILTER_LEN; i++)
+				{
+					static const float g_filter[TWCC_FILTER_LEN] = {-3./8, -1./8, 1./8, 3./8};
+					ice_stream->ddelay_dt[TWCC_FILTER_LEN-1] += (float)(ice_stream->delay[i])*g_filter[i];
+				}
+                                ice_stream->min_ddelay_dt = ice_stream->ddelay_dt[TWCC_FILTER_LEN-1];
+				for (i = 0; i < TWCC_FILTER_LEN; i++)
+				{
+					ice_stream->min_ddelay_dt = MIN(ice_stream->min_ddelay_dt, ice_stream->ddelay_dt[i]);
+				}
+			}
+			ice_stream->current_min_delay = MIN(delay_ms, ice_stream->current_min_delay);
+			gboolean send_signal_to_plugin = FALSE;
+
+			if (!ice_stream->congestion_state && ice_stream->filtered_min_delay + 20*ice_stream->min_ddelay_dt > 300)
+			{
+				ice_stream->congestion_state = TRUE;
+				send_signal_to_plugin = TRUE;
+			}
+			else if (ice_stream->congestion_state && ice_stream->filtered_min_delay + 20*MAX(0,ice_stream->min_ddelay_dt) < 100)
+			{
+				ice_stream->congestion_state = FALSE;
+				send_signal_to_plugin = TRUE;
+			}
+			if (send_signal_to_plugin)
+			{
+				janus_plugin *plugin = (janus_plugin *)ice_stream->handle->app;
+				if(plugin && plugin->incoming_rtp && ice_stream->handle->app_handle &&
+				!g_atomic_int_get(&ice_stream->handle->app_handle->stopped) &&
+				!g_atomic_int_get(&ice_stream->handle->destroyed))
+				{
+					plugin->outgoing_congestion(ice_stream->handle->app_handle, ice_stream->congestion_state);
+				}
+			}
+		}
 	}
 	/* TODO Update the context with the feedback we got */
 	g_list_free(list);
@@ -496,7 +627,7 @@ gboolean janus_rtcp_check_remb(janus_rtcp_header *rtcp, int len) {
 	return TRUE;
 }
 
-int janus_rtcp_fix_ssrc(janus_rtcp_context *ctx, char *packet, int len, int fixssrc, uint32_t newssrcl, uint32_t newssrcr) {
+int janus_rtcp_fix_ssrc(janus_rtcp_context *ctx, char *packet, int len, int fixssrc, uint32_t newssrcl, uint32_t newssrcr, janus_ice_peerconnection * ice_stream) {
 	if(packet == NULL || len <= 0)
 		return -1;
 	janus_rtcp_header *rtcp = (janus_rtcp_header *)packet;
@@ -624,7 +755,7 @@ int janus_rtcp_fix_ssrc(janus_rtcp_context *ctx, char *packet, int len, int fixs
 					}
 				} else if(fmt == 15) {	/* transport-cc */
 					/* If an RTCP context was provided, parse this transport-cc feedback */
-					janus_rtcp_incoming_transport_cc(ctx, rtcpfb, total);
+					janus_rtcp_incoming_transport_cc(ctx, rtcpfb, total, ice_stream);
 				} else {
 					JANUS_LOG(LOG_HUGE, "     #%d ??? -- RTPFB (205, fmt=%d)\n", pno, fmt);
 				}

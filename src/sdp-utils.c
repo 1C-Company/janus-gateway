@@ -177,7 +177,7 @@ janus_sdp_attribute *janus_sdp_attribute_create(const char *name, const char *va
 	a->direction = JANUS_SDP_DEFAULT;
 	a->value = NULL;
 	if(value) {
-		char buffer[512];
+		char buffer[4096];
 		va_list ap;
 		va_start(ap, value);
 		g_vsnprintf(buffer, sizeof(buffer), value, ap);
@@ -1099,7 +1099,7 @@ char *janus_sdp_write(janus_sdp *imported) {
 	if(!imported)
 		return NULL;
 	janus_refcount_increase(&imported->ref);
-	char *sdp = g_malloc(1024), mline[8192], buffer[512];
+	char *sdp = g_malloc(1024), mline[8192], buffer[4096];
 	*sdp = '\0';
 	size_t sdplen = 1024, mlen = sizeof(mline), offset = 0, moffset = 0;
 	/* v= */
@@ -1747,6 +1747,8 @@ int janus_sdp_generate_offer_mline(janus_sdp *offer, ...) {
 		/* It is safe to add transport-wide rtcp feedback message here, won't be used unless the header extension is negotiated */
 		a = janus_sdp_attribute_create("rtcp-fb", "%d transport-cc", pt);
 		m->attributes = g_list_append(m->attributes, a);
+		a = janus_sdp_attribute_create("rtcp-fb", "%d nack", pt);
+		m->attributes = g_list_append(m->attributes, a);
 		/* Check if we need to add extensions to the SDP */
 		if(extids != NULL) {
 			GList *ids = g_list_sort(g_hash_table_get_keys(extids), janus_sdp_id_compare), *iter = ids;
@@ -2117,6 +2119,8 @@ int janus_sdp_generate_answer_mline(janus_sdp *offer, janus_sdp *answer, janus_s
 							pt, custom_audio_fmtp ? custom_audio_fmtp : fmtp);
 						am->attributes = g_list_append(am->attributes, a);
 					}
+					a = janus_sdp_attribute_create("rtcp-fb", "%d nack", pt);
+					am->attributes = g_list_append(am->attributes, a);
 				}
 			} else {
 				/* Add rtpmap attribute */

@@ -749,11 +749,15 @@ void janus_rtp_header_update(janus_rtp_header *header, janus_rtp_switching_conte
 		/* Video timestamp was paused for a while */
 		JANUS_LOG(LOG_HUGE, "Video RTP timestamp reset requested");
 		context->ts_reset = FALSE;
-		context->base_ts_prev = context->last_ts;
+		context->base_ts_prev = context->max_ts;
 		context->base_ts = timestamp;
 		/* How much time since the last audio RTP packet? We compute an offset accordingly */
 		if(context->last_time > 0) {
-			gint64 time_diff = janus_get_monotonic_time() - context->last_time;
+			if (context->last_ts != context->max_ts) {
+				JANUS_LOG(LOG_INFO, "%p Fix TS on reset: last = %"SCNu32", max = %"SCNu32"\n", context, context->last_ts, context->max_ts);
+			}
+
+			gint64 time_diff = janus_get_monotonic_time() - context->max_time;
 			/* We're assuming 90khz for video and 48khz for audio, here */
 			int khz = video ? 90 : 48;
 			if(!video && (header->type == 0 || header->type == 8 || header->type == 9))
@@ -764,25 +768,54 @@ void janus_rtp_header_update(janus_rtp_header *header, janus_rtp_switching_conte
 			context->base_ts_prev += (guint32)time_diff;
 			context->prev_ts += (guint32)time_diff;
 			context->last_ts += (guint32)time_diff;
+			context->max_ts += (guint32)time_diff;
 			JANUS_LOG(LOG_VERB, "Computed offset for RTP timestamp: %"SCNu32"\n", (guint32)time_diff);
 		}
 	}
 	if(context->seq_reset) {
 		/* Audio sequence number was paused for a while: just update that */
 		context->seq_reset = FALSE;
-		context->base_seq_prev = context->last_seq;
+		context->base_seq_prev = context->max_seq;
+		if (context->last_seq != context->max_seq) {
+			JANUS_LOG(LOG_INFO, "%p Fix SN on reset: last = %d, max = %d\n", context, (int)context->last_seq, (int)context->max_seq);
+		}
 		context->base_seq = seq;
+	} else {
+		int16_t next_sn = (int16_t)((seq - context->base_seq) + context->base_seq_prev + 1);
+		int16_t gap_sn = (int16_t)(next_sn - context->last_seq);
+		if (gap_sn < 0) {
+			if (gap_sn < -10) {
+				JANUS_LOG(LOG_INFO, "%p Video RTP sequence possible wrap detected (%d packets)\n", context, (int)gap_sn);
+			}
+			guint64 time_diff_us = janus_get_monotonic_time() - context->last_time;
+#define SN_WRAP_FIX_TIMEOUT_SEC 60
+#define SN_GAP_INSERTED_AFTER_WRAP 100
+			if (time_diff_us > SN_WRAP_FIX_TIMEOUT_SEC*1000*1000ULL) {
+				JANUS_LOG(LOG_WARN, "%p Video RTP sequence wrap fixed (%d packets)\n", context, (int)gap_sn);
+				context->base_seq_prev = (context->base_seq_prev - gap_sn + SN_GAP_INSERTED_AFTER_WRAP);
+			}
+		}
 	}
 	/* Compute a coherent timestamp and sequence number */
 	context->prev_ts = context->last_ts;
 	context->last_ts = (timestamp-context->base_ts) + context->base_ts_prev;
 	context->prev_seq = context->last_seq;
 	context->last_seq = (seq-context->base_seq)+context->base_seq_prev+1;
+	int16_t gap_seq = context->last_seq - context->max_seq;
+	if (gap_seq > 0 || gap_seq < -200) { 	// Assume packet can by delayed by 200 packets
+		context->max_seq = context->last_seq;
+	}
 	/* Update the timestamp and sequence number in the RTP packet */
 	header->timestamp = htonl(context->last_ts);
 	header->seq_number = htons(context->last_seq);
 	/* Take note of when we last handled this RTP packet */
 	context->last_time = janus_get_monotonic_time();
+	int32_t gap_ts = context->last_ts - context->max_ts;
+	int khz = video ? 90 : 48;
+	if (gap_ts >= 0 || gap_ts < -5000*khz) {  // Assume packet can by delayed by 5 sec
+		context->max_ts = context->last_ts;
+		context->max_time = context->last_time;
+	}
 }
 
 
@@ -1074,6 +1107,8 @@ gboolean janus_rtp_simulcasting_context_process_rtp(janus_rtp_simulcasting_conte
 		return FALSE;
 	janus_rtp_header *header = (janus_rtp_header *)buf;
 	uint32_t ssrc = ntohl(header->ssrc);
+	uint32_t rtp_ts = ntohl(header->timestamp);
+
 	int substream = -1;
 	if(ssrc == *(ssrcs)) {
 		substream = 0;
@@ -1126,7 +1161,17 @@ gboolean janus_rtp_simulcasting_context_process_rtp(janus_rtp_simulcasting_conte
 		/* We either just received media on a substream that is higher than
 		 * the target we dropped to (which means the one we want is now flowing
 		 * again) or we've been requested a lower substream target instead */
-		context->substream_target_temp = -1;
+		if (now - context->fallback_time > 15000000LL) {
+			JANUS_LOG(LOG_WARN, "Simulcasting: release 15-sec timeout\n");
+			context->substream_target_temp = -1;
+			context->need_pli = TRUE;
+		}
+	}
+
+	if (context->transport_cc_congestion_detected) {
+		context->need_pli = (context->substream_target_temp != 0);
+		context->substream_target_temp = 0;
+		context->fallback_time = now;
 	}
 	int target = (context->substream_target_temp == -1) ? context->substream_target : context->substream_target_temp;
 	/* Check what we need to do with the packet */
@@ -1147,12 +1192,14 @@ gboolean janus_rtp_simulcasting_context_process_rtp(janus_rtp_simulcasting_conte
 				(context->substream > target && substream < context->substream)) &&
 					((vcodec == JANUS_VIDEOCODEC_VP8 && janus_vp8_is_keyframe(payload, plen)) ||
 					(vcodec == JANUS_VIDEOCODEC_H264 && janus_h264_is_keyframe(payload, plen)))) {
-			JANUS_LOG(LOG_VERB, "Received keyframe on #%d (SSRC %"SCNu32"), switching (was #%d/%"SCNu32")\n",
-				substream, ssrc, context->substream, *(ssrcs + context->substream));
+			JANUS_LOG(LOG_INFO, "%p Received keyframe on #%d (SSRC %"SCNu32", TS %"SCNu32" SN %d), switching (was #%d/%"SCNu32")\n",
+				context, substream, ssrc, rtp_ts, (int)ntohs(header->seq_number), context->substream, *(ssrcs + context->substream));
 			context->substream = substream;
 			/* Notify the caller that the substream changed */
 			context->changed_substream = TRUE;
 			context->last_relayed = now;
+			context->switching_ts = rtp_ts;
+			context->switching_sn = ntohs(header->seq_number);
 		}
 	}
 	/* If we haven't received our desired substream yet, let's drop temporarily */
@@ -1173,6 +1220,7 @@ gboolean janus_rtp_simulcasting_context_process_rtp(janus_rtp_simulcasting_conte
 					if(context->substream_target_temp < 0)
 						context->substream_target_temp = 0;
 					if(context->substream_target_temp != prev_target) {
+						context->fallback_time = now;
 						JANUS_LOG(LOG_WARN, "No packet received on substream %d for a while, falling back to %d\n",
 							context->substream, context->substream_target_temp);
 						/* Notify the caller that we (still) need a PLI */
@@ -1188,6 +1236,13 @@ gboolean janus_rtp_simulcasting_context_process_rtp(janus_rtp_simulcasting_conte
 	if(substream != context->substream) {
 		JANUS_LOG(LOG_HUGE, "Dropping packet (it's from SSRC %"SCNu32", but we're only relaying SSRC %"SCNu32" now\n",
 			ssrc, *(ssrcs + context->substream));
+		return FALSE;
+	}
+
+	int32_t packet_ts = rtp_ts - context->switching_ts;
+	if (-10*90000 < packet_ts && packet_ts < 0) { 	// drop any packets before 15 sec of keyframe
+		JANUS_LOG(LOG_INFO, "%p Dropping delayed packet SSRC = %"SCNu32", TS = %"SCNu32", SN = %5d, because it's before layers switch point TS = %"SCNu32", SN = %5d\n",
+			context, ssrc, rtp_ts, (int)ntohs(header->seq_number), context->switching_ts, context->switching_sn);
 		return FALSE;
 	}
 	context->last_relayed = janus_get_monotonic_time();

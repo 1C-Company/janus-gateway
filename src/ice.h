@@ -456,6 +456,32 @@ struct janus_ice_peerconnection {
 	gint transport_wide_cc_ext_id;
 	/*! \brief Last sent transport wide seq num */
 	guint16 transport_wide_cc_out_seq_num;
+
+#define TWCC_BUF_LEN 1024
+#define TWCC_FILTER_LEN 4
+	/*! \brief Packets send time */
+	guint64 transport_wide_cc_out_packets_time[TWCC_BUF_LEN];
+	/*! \brief Packets size (not used so far) */
+	guint transport_wide_cc_out_packets_size[TWCC_BUF_LEN];
+	/*! \brief TWCC-to-wallclock origins difference */
+	guint64 transport_wide_cc_time_offset;
+	/*! \brief Never-increasing minimum delay */
+	guint64 min_observed_delay;
+	/*! \brief Congestion detected? */
+	gboolean congestion_state;
+	/*! \brief Min delay for 100-ms intervals = matched filter input */
+	gint64 delay[TWCC_FILTER_LEN];
+	/*! \brief Matched filter output ~= ddelay/dt */
+	float ddelay_dt[TWCC_FILTER_LEN];
+	/*! \brief Min delay for current 100-ms interval */
+	gint64 current_min_delay;
+	/*! \brief 100-ms interval start time */
+	gint64 min_update_time;
+	/*! \brief Min delay in delay[] buffer */
+	gint64 filtered_min_delay;
+	/*! \brief Min ddelay/dt in ddelay_dt[] buffer */
+	float min_ddelay_dt;
+
 	/*! \brief Last received transport wide seq num */
 	guint32 transport_wide_cc_last_seq_num;
 	/*! \brief Last transport wide seq num sent on feedback */
@@ -578,6 +604,7 @@ struct janus_ice_peerconnection_medium {
 	gint64 nack_sent_log_ts;
 	/*! \brief Number of NACKs sent since last log message */
 	guint nack_sent_recent_cnt;
+	guint nack_sent_recent_cnt_audio;
 	/*! \brief List of recently received sequence numbers (as a support to NACK generation, for each simulcast SSRC) */
 	janus_seq_info *last_seqs[3];
 	/*! \brief Stats for incoming data (audio/video/data) */
@@ -592,6 +619,13 @@ struct janus_ice_peerconnection_medium {
 	volatile gint destroyed;
 	/*! \brief Reference counter for this instance */
 	janus_refcount ref;
+
+	unsigned last_ts;
+	unsigned intra_ts;
+	gint64 intra_arrival_time;
+	gint64 intra_last_retransmit_time;
+	int max_retransmit_count;
+	gint64 max_retransmit_count_time;
 };
 /*! \brief Method to quickly create a medium to be added to a handle PeerConnection
  * @note This will autogenerate SSRCs, if needed

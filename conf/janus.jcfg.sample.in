@@ -130,7 +130,7 @@ general: {
 									# for a while, so whatever value you choose simply
 									# puts a cap on the maximum concurrency.
 									# Don't change if you don't know what you're doing!
-	#opaqueid_in_api = true			# Opaque IDs set by applications are typically
+	opaqueid_in_api = true			# Opaque IDs set by applications are typically
 									# only passed to event handlers for correlation
 									# purposes, but not sent back to the user or
 									# application in the related Janus API responses
